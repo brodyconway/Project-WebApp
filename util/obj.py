@@ -1,7 +1,8 @@
 from util.part import Part
 
+
 class Obj:
-    def __init__(self, boundary: str, parts):
+    def __init__(self, boundary, parts):
         self.boundary = boundary
         self.parts = parts
 

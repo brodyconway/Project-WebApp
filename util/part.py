@@ -1,11 +1,11 @@
 class Part:
-    def __init__(self, header: dict, name: str, content: bytes):
-        self.header = header
+    def __init__(self, headers, name, content):
+        self.headers = headers
         self.name = name
         self.content = content
 
-    def getHeader(self):
-        return self.header
+    def getHeaders(self):
+        return self.headers
     
     def getName(self):
         return self.name
@@ -13,8 +13,8 @@ class Part:
     def getContent(self):
         return self.content
     
-    def setHeader(self, header: dict):
-        self.header = header
+    def setHeaders(self, headers):
+        self.headers = headers
     
     def setName(self, name: str):
         self.name = name

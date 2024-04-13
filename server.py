@@ -2,7 +2,11 @@ import html
 import bcrypt
 import socketserver
 import secrets
+import os
 import hashlib
+from util.multipart import parse_multipart
+from util.obj import Obj
+from util.part import Part
 from util.request import Request
 from pymongo import MongoClient
 import json
@@ -217,6 +221,29 @@ def serve_logout(request: Request):
     response += 'Location: /'
     return response.encode()
 
+def serve_upload(request: Request):
+    info = parse_multipart(request)
+    i = 1
+    mongo_client = MongoClient('mongo')
+    db = mongo_client['cse312']
+    collection = db['file']
+    if os.path.exists('filename.jpg'):
+        while os.path.exists('filename' + str(i) + '.jpg'):
+            i += 1
+        with open('filename' + str(i) + '.jpg', 'w') as file:
+            if len(info.parts > 0):
+                file.write(info.parts[len(info.parts) - 1].content)
+            collection.insert_one({'name': 'filename' + str(i) + '.jpg'})
+    else:
+        with open('filename.jpg', 'w') as file:
+            file.write(info.parts[len(info.parts) - 1].content)
+            collection.insert_one({'name': 'filename.jpg'})
+    response = 'HTTP/1.1 302 Found\r\n'
+    response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
+    return response.encode()
+
+
+
 def serve_delete(request: Request):
     path = request.path[1:]
     message_id = ''
@@ -273,6 +300,7 @@ router.add_route('POST', '/login$', serve_login)
 router.add_route('POST', '/register$', serve_registration)
 router.add_route('POST', '/logout$', serve_logout)
 router.add_route('DELETE', '/chat-messages/.', serve_delete)
+router.add_route('POST', '/image_upload$', serve_upload)
 
 
 class MyTCPHandler(socketserver.BaseRequestHandler):
