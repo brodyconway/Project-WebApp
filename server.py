@@ -226,6 +226,14 @@ def serve_upload(request: Request):
     i = 1
     mongo_client = MongoClient('mongo')
     db = mongo_client['cse312']
+    id_collection = db['id']
+    ids = id_collection.find_one()
+    if ids is None:
+        theid = 1
+        id_collection.insert_one({'id': 1})
+    else:
+        theid = ids.get('id') + 1
+        id_collection.update_one({}, {'$set': {'id': theid}})
     collection = db['chat']
     if os.path.exists('filename.jpg'):
         while os.path.exists('filename' + str(i) + '.jpg'):
@@ -233,12 +241,12 @@ def serve_upload(request: Request):
         with open('filename' + str(i) + '.jpg', 'w') as file:
             if len(info.parts) > 0:
                 file.write(info.parts[len(info.parts) - 1].content)
-            collection.insert_one({'name': 'filename' + str(i) + '.jpg'})
+            collection.insert_one({'message': '<img src="filename' + str(i) + '.jpg' + '">', 'username': 'User', 'id': theid})
     else:
         with open('filename.jpg', 'w') as file:
             if len(info.parts) > 0:
                 file.write(info.parts[len(info.parts) - 1].content)
-            collection.insert_one({'name': 'filename.jpg'})
+            collection.insert_one({'message': '<img src="filename.jpg' + '">', 'username': 'User', 'id': theid})
     response = 'HTTP/1.1 302 Found\r\n'
     response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
     return response.encode()
