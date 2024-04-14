@@ -226,21 +226,23 @@ def serve_upload(request: Request):
     i = 1
     mongo_client = MongoClient('mongo')
     db = mongo_client['cse312']
-    collection = db['file']
+    collection = db['chat']
     if os.path.exists('filename.jpg'):
         while os.path.exists('filename' + str(i) + '.jpg'):
             i += 1
         with open('filename' + str(i) + '.jpg', 'w') as file:
-            if len(info.parts > 0):
+            if len(info.parts) > 0:
                 file.write(info.parts[len(info.parts) - 1].content)
             collection.insert_one({'name': 'filename' + str(i) + '.jpg'})
     else:
         with open('filename.jpg', 'w') as file:
-            file.write(info.parts[len(info.parts) - 1].content)
+            if len(info.parts) > 0:
+                file.write(info.parts[len(info.parts) - 1].content)
             collection.insert_one({'name': 'filename.jpg'})
     response = 'HTTP/1.1 302 Found\r\n'
     response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
     return response.encode()
+
 
 
 
