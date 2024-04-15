@@ -163,7 +163,8 @@ def serve_chat_get(request: Request):
     chats = chat_collection.find({})
     chat_list = [{}]
     for i in chats:
-        message = html.escape(i.get('message'))
+        #message = html.escape(i.get('message'))
+        message = i.get('message')
         chat_list.append({'message': message, 'username': i.get('username'), 'id': i.get('id')})
 
     body = json.dumps(chat_list)
@@ -224,6 +225,8 @@ def serve_logout(request: Request):
 def serve_upload(request: Request):
     info = parse_multipart(request)
     i = 1
+    print(info.parts)
+    response = 'HTTP/1.1 302 Found\r\n'
     mongo_client = MongoClient('mongo')
     db = mongo_client['cse312']
     id_collection = db['id']
@@ -235,19 +238,15 @@ def serve_upload(request: Request):
         theid = ids.get('id') + 1
         id_collection.update_one({}, {'$set': {'id': theid}})
     collection = db['chat']
-    if os.path.exists('filename.jpg'):
-        while os.path.exists('filename' + str(i) + '.jpg'):
-            i += 1
-        with open('filename' + str(i) + '.jpg', 'w') as file:
-            if len(info.parts) > 0:
-                file.write(info.parts[len(info.parts) - 1].content)
-            collection.insert_one({'message': '<img src="filename' + str(i) + '.jpg' + '">', 'username': 'User', 'id': theid})
-    else:
-        with open('filename.jpg', 'w') as file:
-            if len(info.parts) > 0:
-                file.write(info.parts[len(info.parts) - 1].content)
-            collection.insert_one({'message': '<img src="filename.jpg' + '">', 'username': 'User', 'id': theid})
-    response = 'HTTP/1.1 302 Found\r\n'
+    for part in info.parts:
+        if '.jpg' in part.headers.get('Content-Type') or '.jpeg' in part.headers.get('Content-Type'):
+            filename = f'filename_{theid}.jpg'
+            with open(filename, 'wb') as file:
+                file.write(part.content)
+
+            message = f'<img src="{filename}" alt=Image>'
+            collection.insert_one({'message': message, 'username': 'User', 'id': theid})
+            break
     response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
     return response.encode()
 
@@ -320,6 +319,18 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         received_data = self.request.recv(2048)
+        request = Request(received_data)
+        if 'Content-Length' in request.headers:
+            content_length = int(request.headers['Content-Length'])
+        else:
+            content_length = 0
+        data_size = len(received_data)
+        while content_length > data_size:
+            received_data += self.request.recv(2048)
+            data_size = len(received_data)
+            if len(received_data) == 0:
+                break
+
         print(self.client_address)
         print("--- received data ---")
         print(received_data)
