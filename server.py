@@ -239,12 +239,12 @@ def serve_upload(request: Request):
         id_collection.update_one({}, {'$set': {'id': theid}})
     collection = db['chat']
     for part in info.parts:
-        if '.jpg' in part.headers.get('Content-Type') or '.jpeg' in part.headers.get('Content-Type'):
-            filename = f'filename_{theid}.jpg'
+        if part.headers.get('Content-Type', '').startswith('image/'):
+            filename = 'filename_' + str(theid) + '.jpg'
             with open(filename, 'wb') as file:
                 file.write(part.content)
 
-            message = f'<img src="{filename}" alt=Image>'
+            message = '<img src="' + filename + '">'
             collection.insert_one({'message': message, 'username': 'User', 'id': theid})
             break
     response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
