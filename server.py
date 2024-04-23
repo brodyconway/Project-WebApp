@@ -2,11 +2,7 @@ import html
 import bcrypt
 import socketserver
 import secrets
-import os
 import hashlib
-from util.multipart import parse_multipart
-from util.obj import Obj
-from util.part import Part
 from util.request import Request
 from pymongo import MongoClient
 import json
@@ -163,8 +159,7 @@ def serve_chat_get(request: Request):
     chats = chat_collection.find({})
     chat_list = [{}]
     for i in chats:
-        #message = html.escape(i.get('message'))
-        message = i.get('message')
+        message = html.escape(i.get('message'))
         chat_list.append({'message': message, 'username': i.get('username'), 'id': i.get('id')})
 
     body = json.dumps(chat_list)
@@ -222,37 +217,6 @@ def serve_logout(request: Request):
     response += 'Location: /'
     return response.encode()
 
-def serve_upload(request: Request):
-    info = parse_multipart(request)
-    i = 1
-    print(info.parts)
-    response = 'HTTP/1.1 302 Found\r\n'
-    mongo_client = MongoClient('mongo')
-    db = mongo_client['cse312']
-    id_collection = db['id']
-    ids = id_collection.find_one()
-    if ids is None:
-        theid = 1
-        id_collection.insert_one({'id': 1})
-    else:
-        theid = ids.get('id') + 1
-        id_collection.update_one({}, {'$set': {'id': theid}})
-    collection = db['chat']
-    for part in info.parts:
-        if part.headers.get('Content-Type', '').startswith('image/'):
-            filename = 'filename_' + str(theid) + '.jpg'
-            with open(filename, 'wb') as file:
-                file.write(part.content)
-
-            message = '<img src="' + filename + '">'
-            collection.insert_one({'message': message, 'username': 'User', 'id': theid})
-            break
-    response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
-    return response.encode()
-
-
-
-
 def serve_delete(request: Request):
     path = request.path[1:]
     message_id = ''
@@ -309,7 +273,6 @@ router.add_route('POST', '/login$', serve_login)
 router.add_route('POST', '/register$', serve_registration)
 router.add_route('POST', '/logout$', serve_logout)
 router.add_route('DELETE', '/chat-messages/.', serve_delete)
-router.add_route('POST', '/image_upload$', serve_upload)
 
 
 class MyTCPHandler(socketserver.BaseRequestHandler):
@@ -319,18 +282,6 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         received_data = self.request.recv(2048)
-        request = Request(received_data)
-        if 'Content-Length' in request.headers:
-            content_length = int(request.headers['Content-Length'])
-        else:
-            content_length = 0
-        data_size = len(received_data)
-        while content_length > data_size:
-            received_data += self.request.recv(2048)
-            data_size = len(received_data)
-            if len(received_data) == 0:
-                break
-
         print(self.client_address)
         print("--- received data ---")
         print(received_data)
