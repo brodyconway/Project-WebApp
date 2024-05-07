@@ -387,17 +387,13 @@ def serve_websocket(request: Request, handler):
     handler.request.sendall(response)
     websocket_connections.append(handler)
     received_data = b''
-    next_data = b''
     payload = b''
     payload_length = 0
     while True:
         print('connected')
         read_size = 2048
-        if len(next_data) == 0:
+        if len(received_data) == 0:
             received_data = handler.request.recv(read_size)
-        else:
-            received_data = next_data
-            next_data = b''
         print(received_data)
         mask = received_data[1]
         mask = (mask & 128) >> 7
@@ -409,29 +405,31 @@ def serve_websocket(request: Request, handler):
         elif payload_length == 127:
             extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
             payload_length = extended_payload_length
-        limit = 8
+        sum = 16
         if mask == 1:
-           limit += 4
-        limit = 2048 - limit
+            sum += 4
+        if payload_length >= 126 and payload_length < 65536:
+            sum += 2
+        if payload_length >= 65536:
+            sum += 8
+        limit = 2048 - sum
         print('limit before:' + str(limit))
         print('payload_length:'  + str(payload_length))
         print('actual length:' + str(len(received_data)))
         while payload_length > limit:
             received_data += handler.request.recv(2048)
             limit = len(received_data)
-            limit -= 8
+            limit -= sum
             print('limit after:' + str(limit))
             if len(received_data) == 0:
                 print('NO RECIEVED DATA')
                 break
         frame = parse_ws_frame(received_data)
         print('frame:' + str(frame.payload))
+        print(frame.payload)
         fin_bit = frame.fin_bit
         payload_length = frame.payload_length
         payload = frame.payload
-        sub = 8
-        if mask == 1:
-            sub = 12
         
         if frame.opcode == 1:
             opcode = frame.opcode
@@ -440,16 +438,21 @@ def serve_websocket(request: Request, handler):
             websocket_connections.remove(handler)
             break
         while fin_bit == 0:
-            received_data = handler.request.recv(2048)
-            if not received_data:
+            current_data = handler.request.recv(2048)
+            if not current_data:
                 continue
-            frame = parse_ws_frame(received_data)
+            frame = parse_ws_frame(current_data)
             payload_length += frame.payload_length
             payload += frame.payload
             fin_bit = frame.fin_bit
-        if len(received_data) - sub > payload_length:
-            next_data = received_data[payload_length + sub:]
+
+        current_data = received_data
+        if len(received_data) - sum > payload_length:
+            current_data = received_data[:payload_length + sum]
+            received_data = received_data[payload_length + sum:]
             print('hereee')
+        else:
+            received_data = b''
         
         if opcode == 1:
             string = json.loads(payload.decode())
