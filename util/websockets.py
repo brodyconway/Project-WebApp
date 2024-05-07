@@ -20,15 +20,17 @@ def parse_ws_frame(frame):
     payload_length = payload_length & 127
     current_frame = 2
     if payload_length == 126:
+        print('properly at 126')
         current_frame += 2
         extended_length = frame[2] << 8 | frame[3]
         payload_length = extended_length
     elif payload_length == 127:
+        print('unfortunately at 127')
         current_frame += 8
         extended_payload_length = frame[2] << 56 | frame[3] << 48 | frame[4] << 40 | frame[5] << 32 | frame[6] << 24 | frame[7] << 16 | frame[8] << 8 | frame[9]
         payload_length = extended_payload_length
-        
-
+    print(fin_bit)
+    print('payload length:' + str(payload_length) + ' actual length:' + str(len(frame) - current_frame))
     if mask == 1:
         m = [frame[current_frame], frame[current_frame + 1], frame[current_frame + 2], frame[current_frame + 3]]
         current_frame += 4

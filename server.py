@@ -17,6 +17,8 @@ from util.router import Router
 from util.auth import extract_credentials
 from util.auth import validate_password
 
+websocket_connections = []
+
 def serve_html(request: Request):
     response = 'HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\nContent-Type: text/html; charset=UTF-8\r\n'
     path = request.path[1:]
@@ -166,7 +168,7 @@ def serve_chat_get(request: Request):
     chats = chat_collection.find({})
     chat_list = [{}]
     for i in chats:
-        #message = html.escape(i.get('message'))
+        message = html.escape(i.get('message'))
         message = i.get('message')
         print('image:' + message)
         chat_list.append({'message': message, 'username': i.get('username'), 'id': i.get('id')})
@@ -379,38 +381,75 @@ def serve_websocket(request: Request, handler):
         if document:
             if valid_check(hashed_auth, document.get('username')):
                 username = document.get('username')
+    print('headers:' + str(request.headers))
     accept = compute_accept(request.headers['Sec-WebSocket-Key'])
-    response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept
+    response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept.encode() + b'\r\n\r\n'
     handler.request.sendall(response)
-    next_frame = b''
+    websocket_connections.append(handler)
+    received_data = b''
+    next_data = b''
     payload = b''
     payload_length = 0
     while True:
         print('connected')
         read_size = 2048
-        if next_frame:
-            read_size = 2048 - len(next_frame)
-        received_data = handler.request.recv(read_size)
-        received_data += next_frame
-        next_frame = b''
+        if len(next_data) == 0:
+            received_data = handler.request.recv(read_size)
+        else:
+            received_data = next_data
+            next_data = b''
+        print(received_data)
+        mask = received_data[1]
+        mask = (mask & 128) >> 7
+        payload_length = received_data[1]
+        payload_length = payload_length & 127
+        if payload_length == 126:
+            extended_length = received_data[2] << 8 | received_data[3]
+            payload_length = extended_length
+        elif payload_length == 127:
+            extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
+            payload_length = extended_payload_length
+        limit = 8
+        if mask == 1:
+           limit += 4
+        limit = 2048 - limit
+        print('limit before:' + str(limit))
+        print('payload_length:'  + str(payload_length))
+        print('actual length:' + str(len(received_data)))
+        while payload_length > limit:
+            received_data += handler.request.recv(2048)
+            limit = len(received_data)
+            limit -= 8
+            print('limit after:' + str(limit))
+            if len(received_data) == 0:
+                print('NO RECIEVED DATA')
+                break
         frame = parse_ws_frame(received_data)
+        print('frame:' + str(frame.payload))
         fin_bit = frame.fin_bit
         payload_length = frame.payload_length
         payload = frame.payload
-        if len(payload) > payload_length:
-            next_frame = payload[payload_length:]
-            payload = payload[:payload_length]
+        sub = 8
+        if mask == 1:
+            sub = 12
         
         if frame.opcode == 1:
             opcode = frame.opcode
         if frame.opcode == 8:
+            print('disconnected')
+            websocket_connections.remove(handler)
             break
         while fin_bit == 0:
             received_data = handler.request.recv(2048)
+            if not received_data:
+                continue
             frame = parse_ws_frame(received_data)
             payload_length += frame.payload_length
             payload += frame.payload
             fin_bit = frame.fin_bit
+        if len(received_data) - sub > payload_length:
+            next_data = received_data[payload_length + sub:]
+            print('hereee')
         
         if opcode == 1:
             string = json.loads(payload.decode())
@@ -425,10 +464,12 @@ def serve_websocket(request: Request, handler):
             else:
                 theid = ids.get('id') + 1
                 id_collection.update_one({}, {'$set': {'id': theid}})
-            chat_collection.insert_one({'message': string['message'], 'username': username, 'id': theid})
-            json_string = json.dumps({'messageType': string['messageType'], 'username': username, 'message': string['message'], 'id': theid})
+            message = html.escape(string['message'])
+            chat_collection.insert_one({'message': message, 'username': username, 'id': theid})
+            json_string = json.dumps({'messageType': string['messageType'], 'username': username, 'message': message, 'id': theid})
             frames = generate_ws_frame(json_string.encode())
-            handler.request.sendall(frames)
+            for self in websocket_connections:
+                self.request.sendall(frames)
 
 
             payload = b''
