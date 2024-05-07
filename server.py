@@ -2,13 +2,22 @@ import html
 import bcrypt
 import socketserver
 import secrets
+import os
 import hashlib
+from util.websockets import compute_accept
+from util.websockets import parse_ws_frame
+from util.websockets import generate_ws_frame
+from util.multipart import parse_multipart
+from util.obj import Obj
+from util.part import Part
 from util.request import Request
 from pymongo import MongoClient
 import json
 from util.router import Router
 from util.auth import extract_credentials
 from util.auth import validate_password
+
+websocket_connections = []
 
 def serve_html(request: Request):
     response = 'HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\nContent-Type: text/html; charset=UTF-8\r\n'
@@ -160,6 +169,8 @@ def serve_chat_get(request: Request):
     chat_list = [{}]
     for i in chats:
         message = html.escape(i.get('message'))
+        message = i.get('message')
+        print('image:' + message)
         chat_list.append({'message': message, 'username': i.get('username'), 'id': i.get('id')})
 
     body = json.dumps(chat_list)
@@ -217,6 +228,108 @@ def serve_logout(request: Request):
     response += 'Location: /'
     return response.encode()
 
+def serve_upload(request: Request):
+    info = parse_multipart(request)
+    i = 1
+    response = 'HTTP/1.1 302 Found\r\n'
+    mongo_client = MongoClient('mongo')
+    db = mongo_client['cse312']
+    account_collection = db['account']
+    id_collection = db['id']
+    ids = id_collection.find_one()
+    if ids is None:
+        theid = 1
+        id_collection.insert_one({'id': 1})
+    else:
+        theid = ids.get('id') + 1
+        id_collection.update_one({}, {'$set': {'id': theid}})
+    collection = db['chat']
+
+    for part in info.parts:
+        if 'jpg' in part.headers.get('Content-Type') or 'jpeg' in part.headers.get('Content-Type'):
+            if 'Content-Disposition' in part.headers:
+                original_name = part.headers.get('Content-Disposition')
+                original_name = original_name.split(';')
+                for name in original_name:
+                    if ' filename' in name:
+                        name = name.split('=')
+                        filename = name[1].strip('/')
+                        part.filename = filename
+            filename = 'filename_' + str(theid) + '.jpg'
+            with open(filename, 'wb') as file:
+                file.write(part.content)
+
+            message = '<img src="' + filename + '">'
+            if 'auth_token' in request.cookies:
+                auth = request.cookies.get('auth_token')
+                hashed_auth = hashlib.sha256(auth.encode()).hexdigest()
+                check = {'token': hashed_auth}
+                document = account_collection.find_one(check)
+                if document:
+                    if valid_check(hashed_auth, document.get('username')):
+                        username = document.get('username')
+                        collection.insert_one({'message': message, 'username': username, 'id': theid})
+                        break
+                    else:
+                        collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                        break
+                else:
+                    collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                    break
+            else:
+                collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                break
+        if 'mp4' in part.headers.get('Content-Type'):
+            if 'Content-Disposition' in part.headers:
+                original_name = part.headers.get('Content-Disposition')
+                original_name = original_name.split(';')
+                for name in original_name:
+                    if ' filename' in name:
+                        name = name.split('=')
+                        filename = name[1].strip('/')
+                        part.filename = filename
+            filename = 'filename_' + str(theid) + '.mp4'
+            with open(filename, 'wb') as file:
+                file.write(part.content)
+
+            message = '''
+            <video width="400" controls autoplay muted>
+                <source src="''' + filename + '''" type="video/mp4">
+            </video>'''
+            if 'auth_token' in request.cookies:
+                auth = request.cookies.get('auth_token')
+                hashed_auth = hashlib.sha256(auth.encode()).hexdigest()
+                check = {'token': hashed_auth}
+                document = account_collection.find_one(check)
+                if document:
+                    if valid_check(hashed_auth, document.get('username')):
+                        username = document.get('username')
+                        collection.insert_one({'message': message, 'username': username, 'id': theid})
+                        break
+                    else:
+                        collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                        break
+                else:
+                    collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                    break
+            else:
+                collection.insert_one({'message': message, 'username': 'Guest', 'id': theid})
+                break
+    response += 'Content-Length: 0; charset=UTF-8\r\nLocation: /'
+    return response.encode()
+
+def host_bytes(request: Request):
+    filename = request.path[1:]
+    with open(filename, 'rb') as file:
+        image = file.read()
+    response = 'HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\nContent-Type: image/jpeg; charset=UTF-8\r\n'
+    response += 'Content-Length: ' + str(len(image)) + '\r\n\r\n'
+    return response.encode() + image
+
+
+
+
+
 def serve_delete(request: Request):
     path = request.path[1:]
     message_id = ''
@@ -255,6 +368,117 @@ def valid_check(hashed_auth, username: str):
             return True
     return False
 
+def serve_websocket(request: Request, handler):
+    mongo_client = MongoClient('mongo')
+    db = mongo_client['cse312']
+    account_collection = db['account']
+    username = 'Guest'
+    if 'auth_token' in request.cookies:
+        auth = request.cookies.get('auth_token')
+        hashed_auth = hashlib.sha256(auth.encode()).hexdigest()
+        check = {'token': hashed_auth}
+        document = account_collection.find_one(check)
+        if document:
+            if valid_check(hashed_auth, document.get('username')):
+                username = document.get('username')
+    print('headers:' + str(request.headers))
+    accept = compute_accept(request.headers['Sec-WebSocket-Key'])
+    response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept.encode() + b'\r\n\r\n'
+    handler.request.sendall(response)
+    websocket_connections.append(handler)
+    received_data = b''
+    payload = b''
+    payload_length = 0
+    while True:
+        print('connected')
+        read_size = 2048
+        if len(received_data) == 0:
+            received_data = handler.request.recv(read_size)
+        print(received_data)
+        mask = received_data[1]
+        mask = (mask & 128) >> 7
+        payload_length = received_data[1]
+        payload_length = payload_length & 127
+        if payload_length == 126:
+            extended_length = received_data[2] << 8 | received_data[3]
+            payload_length = extended_length
+        elif payload_length == 127:
+            extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
+            payload_length = extended_payload_length
+        sum = 16
+        if mask == 1:
+            sum += 4
+        if payload_length >= 126 and payload_length < 65536:
+            sum += 2
+        if payload_length >= 65536:
+            sum += 8
+        limit = 2048 - sum
+        print('limit before:' + str(limit))
+        print('payload_length:'  + str(payload_length))
+        print('actual length:' + str(len(received_data)))
+        while payload_length > limit:
+            received_data += handler.request.recv(2048)
+            limit = len(received_data)
+            limit -= sum
+            print('limit after:' + str(limit))
+            if len(received_data) == 0:
+                print('NO RECIEVED DATA')
+                break
+        frame = parse_ws_frame(received_data)
+        print('frame:' + str(frame.payload))
+        print(frame.payload)
+        fin_bit = frame.fin_bit
+        payload_length = frame.payload_length
+        payload = frame.payload
+        
+        if frame.opcode == 1:
+            opcode = frame.opcode
+        if frame.opcode == 8:
+            print('disconnected')
+            websocket_connections.remove(handler)
+            break
+        while fin_bit == 0:
+            current_data = handler.request.recv(2048)
+            if not current_data:
+                continue
+            frame = parse_ws_frame(current_data)
+            payload_length += frame.payload_length
+            payload += frame.payload
+            fin_bit = frame.fin_bit
+
+        current_data = received_data
+        if len(received_data) - sum > payload_length:
+            current_data = received_data[:payload_length + sum]
+            received_data = received_data[payload_length + sum:]
+            print('hereee')
+        else:
+            received_data = b''
+        
+        if opcode == 1:
+            string = json.loads(payload.decode())
+            mongo_client = MongoClient('mongo')
+            db = mongo_client['cse312']
+            chat_collection = db['chat']
+            id_collection = db['id']
+            ids = id_collection.find_one()
+            if ids is None:
+                theid = 1
+                id_collection.insert_one({'id': 1})
+            else:
+                theid = ids.get('id') + 1
+                id_collection.update_one({}, {'$set': {'id': theid}})
+            message = html.escape(string['message'])
+            chat_collection.insert_one({'message': message, 'username': username, 'id': theid})
+            json_string = json.dumps({'messageType': string['messageType'], 'username': username, 'message': message, 'id': theid})
+            frames = generate_ws_frame(json_string.encode())
+            for self in websocket_connections:
+                self.request.sendall(frames)
+
+
+            payload = b''
+            payload_length = 0
+
+
 
 
 
@@ -273,6 +497,9 @@ router.add_route('POST', '/login$', serve_login)
 router.add_route('POST', '/register$', serve_registration)
 router.add_route('POST', '/logout$', serve_logout)
 router.add_route('DELETE', '/chat-messages/.', serve_delete)
+router.add_route('POST', '/image_upload$', serve_upload)
+router.add_route('GET', '/filename_.', host_bytes)
+router.add_route('GET', '/websocket$', serve_websocket)
 
 
 class MyTCPHandler(socketserver.BaseRequestHandler):
@@ -282,15 +509,25 @@ class MyTCPHandler(socketserver.BaseRequestHandler):
 
     def handle(self):
         received_data = self.request.recv(2048)
+        request = Request(received_data)
+        if 'Content-Length' in request.headers:
+            content_length = int(request.headers['Content-Length'])
+        else:
+            content_length = 0
+        data_size = len(received_data)
+        while content_length > data_size:
+            received_data += self.request.recv(2048)
+            data_size = len(received_data)
+            if len(received_data) == 0:
+                break
+
         print(self.client_address)
         print("--- received data ---")
         print(received_data)
         print("--- end of data ---\n\n")
         request = Request(received_data)
-        response = router.route_request(request)
+        response = router.route_request(request, self)
         self.request.sendall(response)
-
-
 
 
     # TODO: Parse the HTTP request and use self.request.sendall(response) to send your response
@@ -302,7 +539,7 @@ def main():
     port = 8080
     socketserver.TCPServer.allow_reuse_address = True
 
-    server = socketserver.TCPServer((host, port), MyTCPHandler)
+    server = socketserver.ThreadingTCPServer((host, port), MyTCPHandler)
 
     print("Listening on port " + str(port))
 
