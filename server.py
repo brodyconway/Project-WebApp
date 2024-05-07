@@ -370,68 +370,69 @@ def serve_websocket(request: Request, handler):
     mongo_client = MongoClient('mongo')
     db = mongo_client['cse312']
     account_collection = db['account']
+    username = 'Guest'
     if 'auth_token' in request.cookies:
         auth = request.cookies.get('auth_token')
         hashed_auth = hashlib.sha256(auth.encode()).hexdigest()
         check = {'token': hashed_auth}
         document = account_collection.find_one(check)
-        username = 'Guest'
         if document:
             if valid_check(hashed_auth, document.get('username')):
-                accept = compute_accept(request.headers['Sec-WebSocket-Key'])
-                response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept
-                handler.request.sendall(response)
                 username = document.get('username')
+    accept = compute_accept(request.headers['Sec-WebSocket-Key'])
+    response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept
+    handler.request.sendall(response)
+    next_frame = b''
+    payload = b''
+    payload_length = 0
+    while True:
+        print('connected')
+        read_size = 2048
+        if next_frame:
+            read_size = 2048 - len(next_frame)
+        received_data = handler.request.recv(read_size)
+        received_data += next_frame
         next_frame = b''
-        payload = b''
-        payload_length = 0
-        while True:
-            print('connected')
-            read_size = 2048
-            if next_frame:
-                read_size = 2048 - len(next_frame)
-            received_data = handler.request.recv(read_size)
-            received_data += next_frame
-            next_frame = b''
+        frame = parse_ws_frame(received_data)
+        fin_bit = frame.fin_bit
+        payload_length = frame.payload_length
+        payload = frame.payload
+        if len(payload) > payload_length:
+            next_frame = payload[payload_length:]
+            payload = payload[:payload_length]
+        
+        if frame.opcode == 1:
+            opcode = frame.opcode
+        if frame.opcode == 8:
+            break
+        while fin_bit == 0:
+            received_data = handler.request.recv(2048)
             frame = parse_ws_frame(received_data)
+            payload_length += frame.payload_length
+            payload += frame.payload
             fin_bit = frame.fin_bit
-            payload_length = frame.payload_length
-            payload = frame.payload
-            if len(payload) > payload_length:
-                next_frame = payload[payload_length:]
-                payload = payload[:payload_length]
-            
-            if frame.opcode == 1:
-                opcode = frame.opcode
-            if frame.opcode == 8:
-                break
-            while fin_bit == 0:
-                received_data = handler.request.recv(2048)
-                frame = parse_ws_frame(received_data)
-                payload_length += frame.payload_length
-                payload += frame.payload
-                fin_bit = frame.fin_bit
-            
-            if opcode == 1:
-                string = json.loads(payload.decode())
-                mongo_client = MongoClient('mongo')
-                db = mongo_client['cse312']
-                chat_collection = db['chat']
-                id_collection = db['id']
-                ids = id_collection.find_one()
-                if ids is None:
-                    theid = 1
-                    id_collection.insert_one({'id': 1})
-                else:
-                    theid = ids.get('id') + 1
-                    id_collection.update_one({}, {'$set': {'id': theid}})
-                chat_collection.insert_one({'message': string['message'], 'username': username, 'id': theid})
-                json_string = json.dumps({'messageType': string['messageType'], 'username': username, 'message': string['message'], 'id': theid})
-                handler.request.sendall(json_string.encode())
+        
+        if opcode == 1:
+            string = json.loads(payload.decode())
+            mongo_client = MongoClient('mongo')
+            db = mongo_client['cse312']
+            chat_collection = db['chat']
+            id_collection = db['id']
+            ids = id_collection.find_one()
+            if ids is None:
+                theid = 1
+                id_collection.insert_one({'id': 1})
+            else:
+                theid = ids.get('id') + 1
+                id_collection.update_one({}, {'$set': {'id': theid}})
+            chat_collection.insert_one({'message': string['message'], 'username': username, 'id': theid})
+            json_string = json.dumps({'messageType': string['messageType'], 'username': username, 'message': string['message'], 'id': theid})
+            frames = generate_ws_frame(json_string.encode())
+            handler.request.sendall(frames)
 
 
-                payload = b''
-                payload_length = 0
+            payload = b''
+            payload_length = 0
 
 
 
