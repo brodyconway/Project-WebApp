@@ -11,11 +11,31 @@ function initWS() {
         const messageType = message.messageType
         if(messageType === 'chatMessage'){
             addMessageToChat(message);
+        }else if(messageType === 'updateUserList'){
+            addOnlineuser(message);
+        }else if(messageType === 'deleteUserList'){
+            deleteOnlineUser(message)
         }else{
             // send message to WebRTC
             processMessageAsWebRTC(message, messageType);
+        
         }
     }
+}
+
+function deleteOnlineUser(message){
+    const userElementToRemove = document.getElementById('user_status' + message.username);
+    if (userElementToRemove) {
+        userElementToRemove.remove();
+    }
+}
+
+function addOnlineuser(message){
+    const userListElement = document.getElementById('user-list');
+    const newUserElement = document.createElement('div');
+    newUserElement.id = 'user_status' + message.username;
+    newUserElement.textContent = message.username + ' is online';
+    userListElement.appendChild(newUserElement);
 }
 
 function deleteMessage(messageId) {
@@ -57,10 +77,6 @@ function sendChat() {
     if (ws) {
         // Using WebSockets
         socket.send(JSON.stringify({'messageType': 'chatMessage', 'message': message}));
-        socket.send(JSON.stringify({'messageType': 'chatMessage', 'message': 'hello'}));
-        socket.send(JSON.stringify({'messageType': 'chatMessage', 'message': 'hello'}));
-        socket.send(JSON.stringify({'messageType': 'chatMessage', 'message': 'hello'}));
-        socket.send(JSON.stringify({'messageType': 'chatMessage', 'message': 'hello'}));
     } else {
         // Using AJAX
         const request = new XMLHttpRequest();
