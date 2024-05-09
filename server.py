@@ -18,6 +18,7 @@ from util.auth import extract_credentials
 from util.auth import validate_password
 
 websocket_connections = []
+online_users = []
 
 def serve_html(request: Request):
     response = 'HTTP/1.1 200 OK\r\nX-Content-Type-Options: nosniff\r\nContent-Type: text/html; charset=UTF-8\r\n'
@@ -385,74 +386,233 @@ def serve_websocket(request: Request, handler):
     accept = compute_accept(request.headers['Sec-WebSocket-Key'])
     response = b'HTTP/1.1 101 Switching Protocols\r\nX-Content-Type-Options: nosniff\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ' + accept.encode() + b'\r\n\r\n'
     handler.request.sendall(response)
+    if username != 'Guest':
+        if username not in online_users:
+            online_users.insert(0, username)
+            for self in websocket_connections:
+                json_string = json.dumps({'messageType': 'updateUserList', 'username': username})
+                frames = generate_ws_frame(json_string.encode())
+                self.request.sendall(frames)
+    for i in online_users:
+        json_string = json.dumps({'messageType': 'updateUserList', 'username': i})
+        frames = generate_ws_frame(json_string.encode())
+        handler.request.sendall(frames)
     websocket_connections.append(handler)
     received_data = b''
     payload = b''
     payload_length = 0
     while True:
         print('connected')
+        continuance = 0
         read_size = 2048
         if len(received_data) == 0:
             received_data = handler.request.recv(read_size)
         print(received_data)
-        mask = received_data[1]
-        mask = (mask & 128) >> 7
-        payload_length = received_data[1]
-        payload_length = payload_length & 127
-        if payload_length == 126:
-            extended_length = received_data[2] << 8 | received_data[3]
-            payload_length = extended_length
-        elif payload_length == 127:
-            extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
-            payload_length = extended_payload_length
-        sum = 16
-        if mask == 1:
-            sum += 4
-        if payload_length >= 126 and payload_length < 65536:
-            sum += 2
-        if payload_length >= 65536:
-            sum += 8
-        limit = 2048 - sum
-        print('limit before:' + str(limit))
-        print('payload_length:'  + str(payload_length))
-        print('actual length:' + str(len(received_data)))
-        while payload_length > limit:
-            received_data += handler.request.recv(2048)
-            limit = len(received_data)
-            limit -= sum
-            print('limit after:' + str(limit))
-            if len(received_data) == 0:
-                print('NO RECIEVED DATA')
-                break
-        frame = parse_ws_frame(received_data)
-        print('frame:' + str(frame.payload))
-        print(frame.payload)
-        fin_bit = frame.fin_bit
-        payload_length = frame.payload_length
-        payload = frame.payload
-        
-        if frame.opcode == 1:
-            opcode = frame.opcode
-        if frame.opcode == 8:
-            print('disconnected')
-            websocket_connections.remove(handler)
-            break
+        fin_bit = received_data[0]
+        fin_bit = (fin_bit & 128) >> 7
         while fin_bit == 0:
-            current_data = handler.request.recv(2048)
-            if not current_data:
-                continue
-            frame = parse_ws_frame(current_data)
-            payload_length += frame.payload_length
-            payload += frame.payload
+            continuance = 1
+            mask = received_data[1]
+            mask = (mask & 128) >> 7
+            temp = received_data[1]
+            temp = temp & 127
+            if temp == 126:
+                extended_length = received_data[2] << 8 | received_data[3]
+                temp = extended_length
+            elif temp == 127:
+                extended_temp = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
+                temp = extended_temp
+            sum = 2
+            if mask == 1:
+                sum += 4
+            if temp >= 126 and temp < 65536:
+                sum += 2
+            if temp >= 65536:
+                sum += 8
+            limit = 2048 - sum
+            print('limit before:' + str(limit))
+            print('temp:'  + str(temp))
+            print('actual length:' + str(len(received_data)))
+            while temp > limit:
+                received_data += handler.request.recv(2048)
+                limit = len(received_data)
+                limit -= sum
+                print('limit after:' + str(limit))
+                if len(received_data) == 0:
+                    print('NO RECIEVED DATA')
+                    break
+            frame = parse_ws_frame(received_data)
+            print('frame:' + str(frame.payload))
             fin_bit = frame.fin_bit
+            temp = frame.payload_length
+            temp_payload = frame.payload
+            
+            if frame.opcode == 1:
+                opcode = frame.opcode
+            if frame.opcode == 8:
+                print('disconnected')
+                websocket_connections.remove(handler)
+                if username != 'Guest':
+                    for self in websocket_connections:
+                        json_string = json.dumps({'messageType': 'deleteUserList', 'username': username})
+                        frames = generate_ws_frame(json_string.encode())
+                        self.request.sendall(frames)
+                online_users.remove(username)
+                break
 
-        current_data = received_data
-        if len(received_data) - sum > payload_length:
-            current_data = received_data[:payload_length + sum]
-            received_data = received_data[payload_length + sum:]
-            print('hereee')
+            print('fin_bit:')
+            print(temp)
+            print(len(temp_payload))
+            print(len(received_data) - sum)
+            current_data = received_data
+            if len(received_data) - sum > temp:
+                current_data = received_data[:temp + sum]
+                received_data = received_data[temp + sum:]
+                print('hereee')
+            else:
+                received_data = b''
+            payload_length += temp
+            payload += temp_payload
+            read_size = 2048
+            if len(received_data) == 0:
+                received_data = handler.request.recv(read_size)
+            print(received_data)
+            fin_bit = received_data[0]
+            fin_bit = (fin_bit & 128) >> 7
+
+        if continuance == 0:
+            read_size = 2048
+            if len(received_data) == 0:
+                received_data = handler.request.recv(read_size)
+            print(received_data)
+            mask = received_data[1]
+            mask = (mask & 128) >> 7
+            payload_length = received_data[1]
+            payload_length = payload_length & 127
+            if payload_length == 126:
+                extended_length = received_data[2] << 8 | received_data[3]
+                payload_length = extended_length
+            elif payload_length == 127:
+                extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
+                payload_length = extended_payload_length
+            sum = 2
+            if mask == 1:
+                sum += 4
+            if payload_length >= 126 and payload_length < 65536:
+                sum += 2
+            if payload_length >= 65536:
+                sum += 8
+            limit = 2048 - sum
+            print('limit before:' + str(limit))
+            print('payload_length:'  + str(payload_length))
+            print('actual length:' + str(len(received_data)))
+            while payload_length > limit:
+                received_data += handler.request.recv(2048)
+                limit = len(received_data)
+                limit -= sum
+                print('limit after:' + str(limit))
+                if len(received_data) == 0:
+                    print('NO RECIEVED DATA')
+                    break
+            frame = parse_ws_frame(received_data)
+            print('frame:' + str(frame.payload))
+            fin_bit = frame.fin_bit
+            payload_length = frame.payload_length
+            payload = frame.payload
+                
+            if frame.opcode == 1:
+                opcode = frame.opcode
+            if frame.opcode == 8:
+                print('disconnected')
+                websocket_connections.remove(handler)
+                if username != 'Guest':
+                    for self in websocket_connections:
+                        json_string = json.dumps({'messageType': 'deleteUserList', 'username': username})
+                        frames = generate_ws_frame(json_string.encode())
+                        self.request.sendall(frames)
+                online_users.remove(username)
+                break
+
+            print('fin_bit:')
+            print(payload_length)
+            print(len(payload))
+            print(len(received_data) - sum)
+            current_data = received_data
+            if len(received_data) - sum > payload_length:
+                current_data = received_data[:payload_length + sum]
+                received_data = received_data[payload_length + sum:]
+                print('hereee')
+            else:
+                received_data = b''
         else:
-            received_data = b''
+            mask = received_data[1]
+            mask = (mask & 128) >> 7
+            temp_payload_length = received_data[1]
+            temp_payload_length = temp_payload_length & 127
+            if temp_payload_length == 126:
+                extended_length = received_data[2] << 8 | received_data[3]
+                temp_payload_length = extended_length
+            elif temp_payload_length == 127:
+                extended_payload_length = received_data[2] << 56 | received_data[3] << 48 | received_data[4] << 40 | received_data[5] << 32 | received_data[6] << 24 | received_data[7] << 16 | received_data[8] << 8 | received_data[9]
+                temp_payload_length = extended_payload_length
+            sum = 2
+            if mask == 1:
+                sum += 4
+            if temp_payload_length >= 126 and temp_payload_length < 65536:
+                sum += 2
+            if temp_payload_length >= 65536:
+                sum += 8
+            limit = 2048 - sum
+            print('limit before:' + str(limit))
+            print('payload_length:'  + str(temp_payload_length))
+            print('actual length:' + str(len(received_data)))
+            while temp_payload_length > limit:
+                received_data += handler.request.recv(2048)
+                limit = len(received_data)
+                limit -= sum
+                print('limit after:' + str(limit))
+                if len(received_data) == 0:
+                    print('NO RECIEVED DATA')
+                    break
+            frame = parse_ws_frame(received_data)
+            print('frame:' + str(frame.payload))
+            fin_bit = frame.fin_bit
+            temp_payload_length = frame.payload_length
+            temp_payload = frame.payload
+                
+            if frame.opcode == 1:
+                opcode = frame.opcode
+            if frame.opcode == 8:
+                print('disconnected')
+                websocket_connections.remove(handler)
+                if username != 'Guest':
+                    for self in websocket_connections:
+                        json_string = json.dumps({'messageType': 'deleteUserList', 'username': username})
+                        frames = generate_ws_frame(json_string.encode())
+                        self.request.sendall(frames)
+                online_users.remove(username)
+                break
+
+            print('fin_bit:')
+            print(temp_payload_length)
+            print(len(temp_payload))
+            print(len(received_data) - sum)
+            current_data = received_data
+            if len(received_data) - sum > temp_payload_length:
+                current_data = received_data[:temp_payload_length + sum]
+                received_data = received_data[temp_payload_length + sum:]
+                print('hereee')
+            else:
+                received_data = b''
+            payload_length += temp_payload_length
+            payload += temp_payload
+            print(len(payload))
+            print(payload_length)
+
+        
+
+
+
         
         if opcode == 1:
             string = json.loads(payload.decode())

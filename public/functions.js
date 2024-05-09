@@ -1,4 +1,4 @@
-const ws = false;
+const ws = true;
 let socket = null;
 
 function initWS() {
@@ -11,11 +11,31 @@ function initWS() {
         const messageType = message.messageType
         if(messageType === 'chatMessage'){
             addMessageToChat(message);
+        }else if(messageType === 'updateUserList'){
+            addOnlineuser(message);
+        }else if(messageType === 'deleteUserList'){
+            deleteOnlineUser(message)
         }else{
             // send message to WebRTC
             processMessageAsWebRTC(message, messageType);
+        
         }
     }
+}
+
+function deleteOnlineUser(message){
+    const userElementToRemove = document.getElementById('user_status' + message.username);
+    if (userElementToRemove) {
+        userElementToRemove.remove();
+    }
+}
+
+function addOnlineuser(message){
+    const userListElement = document.getElementById('user-list');
+    const newUserElement = document.createElement('div');
+    newUserElement.id = 'user_status' + message.username;
+    newUserElement.textContent = message.username + ' is online';
+    userListElement.appendChild(newUserElement);
 }
 
 function deleteMessage(messageId) {
